@@ -1,0 +1,144 @@
+USE gdb023;
+select * from dim_customer;
+select * from dim_product;
+select * from fact_gross_price;
+select * from fact_pre_invoice_deductions;
+select * from fact_sales_monthly;
+
+
+/* 1 */
+/*Provided the list of markets in which customer "Atliq Exclusive" operates its business in the APAC region.*/
+select market
+from dim_customer
+where region = 'APAC' && customer = 'Atliq Exclusive'
+group by market;
+/*Provided the list of markets in which customer "Atliq Exclusive" operates its business in the APAC region.*/
+
+
+/* 2 */
+set @unique_products_2020 = (
+select count(distinct product_code)
+from fact_gross_price
+where fiscal_year = 2020);
+
+set @unique_products_2021 = (
+select count(distinct product_code)
+from fact_gross_price
+where fiscal_year = 2021);
+       
+set @percentage_chg = round(((@unique_products_2021-@unique_products_2020) / @unique_products_2020)*100, 3);
+
+SELECT @unique_products_2020 AS unique_products_2020, 
+	   @unique_products_2021 AS unique_products_2021, 
+       @percentage_chg As percentage_chg;
+
+
+
+/* 3 */
+select dim_product.segment,  
+COUNT(distinct dim_product.product_code) AS product_count
+from dim_product
+group by segment 
+order by product_count desc;
+
+
+/* 4 */
+select
+dim_product.segment,
+count(case when fact_gross_price.fiscal_year = 2020 then dim_product.product_code end) as product_count_2020,
+count(case when fact_gross_price.fiscal_year = 2021 then dim_product.product_code end) as preduct_count_2021,
+count(case when fact_gross_price.fiscal_year = 2021 then dim_product.product_code end)-count(case when fact_gross_price.fiscal_year = 2020 then dim_product.product_code end) as increase
+from dim_product
+inner join fact_gross_price on dim_product.product_code = fact_gross_price.product_code
+group by dim_product.segment 
+order by increase desc;
+
+
+/* 5 */
+select fact_manufacturing_cost.product_code,dim_product.product, manufacturing_cost
+from fact_manufacturing_cost
+inner join dim_product on fact_manufacturing_cost.product_code = dim_product.product_code
+where fact_manufacturing_cost.manufacturing_cost = (select max(manufacturing_cost) from fact_manufacturing_cost) or
+	  fact_manufacturing_cost.manufacturing_cost = (select min(manufacturing_cost) from fact_manufacturing_cost)
+order by  manufacturing_cost desc;
+
+
+
+/* 6 */
+select dim_customer.customer_code, dim_customer.customer, fact_pre_invoice_deductions.pre_invoice_discount_pct * 100 as pre_invoice_discount_pct
+from dim_customer 
+inner join fact_pre_invoice_deductions on dim_customer.customer_code = fact_pre_invoice_deductions.customer_code
+where dim_customer.sub_zone = 'INDIA' and fact_pre_invoice_deductions.fiscal_year = 2021
+order by fact_pre_invoice_deductions.pre_invoice_discount_pct desc limit 5;
+
+
+
+/* 7 */
+select Year(date) as Year,
+	   monthname(date) as Month,
+	   round(sum(sold_quantity * fact_gross_price.gross_price/1000000),2) as Gross_sales_Amount
+ from fact_sales_monthly
+ inner join dim_customer on dim_customer.customer_code = fact_sales_monthly.customer_code
+ inner join fact_gross_price on fact_gross_price.product_code = fact_sales_monthly.product_code and fact_gross_price.fiscal_year = fact_sales_monthly.fiscal_year
+ where dim_customer.customer='Atliq Exclusive'
+ group by Month, Year
+ order by Year;
+/*Good use of group by*/
+
+
+
+/* 8 */
+select 
+	case
+    when month(date) in(9, 10, 11) then '1'
+	when month(date) in(12, 1, 2) then '2'
+	when month(date) in(3, 4, 5) then '3'
+    when month(date) in(6, 7, 8) then '4'
+    end as QUARTER,
+	sum(sold_quantity) as total_sold_quantity
+from fact_sales_monthly
+where fiscal_year = 2020
+group by QUARTER
+order by QUARTER;
+
+
+
+/* 9 */
+select 
+	channel,
+    round(sum(fact_gross_price.gross_price * fact_sales_monthly.sold_quantity/1000000), 3) as gross_sales_mln,
+    round(sum(fact_gross_price.gross_price * fact_sales_monthly.sold_quantity) /
+		(select sum(fact_gross_price.gross_price * fact_sales_monthly.sold_quantity) 
+		 from fact_sales_monthly 
+         inner join fact_gross_price 
+         ON fact_gross_price.product_code = fact_sales_monthly.product_code 
+         where fact_sales_monthly.fiscal_year = 2021) * 100 , 3) as percentage
+from dim_customer
+inner join fact_sales_monthly on dim_customer.customer_code = fact_sales_monthly.customer_code
+inner join fact_gross_price on fact_gross_price.product_code = fact_sales_monthly.product_code
+where  fact_sales_monthly.fiscal_year = 2021
+group by channel;
+
+
+/* 10 */
+with ranked as(
+	select
+	dim_product.division as division,
+	dim_product.product_code as product_code,
+	dim_product.product as product,
+	sum(fact_sales_monthly.sold_quantity) as total_sold_quantity,
+    rank() over(partition by dim_product.division order by sum(fact_sales_monthly.sold_quantity) desc) as rank_order
+	from dim_product
+	inner join fact_sales_monthly on fact_sales_monthly.product_code = dim_product.product_code
+	where fact_sales_monthly.fiscal_year = 2021
+	group by  dim_product.division, dim_product.product_code, dim_product.product
+)
+select 
+division,
+product_code,
+product,
+total_sold_quantity,
+rank_order
+from ranked
+where rank_order<=3
+order by division, total_sold_quantity  desc;
